@@ -1,140 +1,115 @@
-const { execSync } = require('child_process');
-const fs = require('fs');
-const path = require('path');
-const readline = require('readline');
+#!/usr/bin/env node
 
-const FRAMEWORKS = {
-  'next': {
-    name: 'Next.js',
-    command: 'npx create-next-app@latest',
-    buildCommand: 'npm run build',
-    defaultPort: 3000
+import { execSync } from 'child_process';
+import fs from 'fs';
+import path from 'path';
+
+const projectName = process.argv[2];
+if (!projectName) {
+  console.error('Please specify a project name');
+  process.exit(1);
+}
+
+// Create project directory and initialize
+console.log(`Creating new project: ${projectName}`);
+execSync(`mkdir ${projectName}`);
+process.chdir(projectName);
+
+// Initialize git
+execSync('git init');
+
+// Create package.json
+const packageJson = {
+  name: projectName,
+  version: '1.0.0',
+  type: 'module',
+  scripts: {
+    dev: 'vite',
+    build: 'vite build',
+    preview: 'vite preview',
+    deploy: 'wrangler pages publish dist'
   },
-  'remix': {
-    name: 'Remix',
-    command: 'npx create-remix@latest',
-    buildCommand: 'npm run build',
-    defaultPort: 3000
+  dependencies: {
+    react: '^18.2.0',
+    'react-dom': '^18.2.0',
+    '@anthropic-ai/sdk': '^0.10.0',
+    '@cloudflare/workers-types': '^4.20240108.0',
+    'lucide-react': '^0.263.1'
   },
-  'vite-react': {
-    name: 'Vite + React',
-    command: 'npm create vite@latest -- --template react',
-    buildCommand: 'npm run build',
-    defaultPort: 5173
-  },
-  'nuxt': {
-    name: 'Nuxt',
-    command: 'npx nuxi init',
-    buildCommand: 'npm run build',
-    defaultPort: 3000
-  },
-  'sveltekit': {
-    name: 'SvelteKit',
-    command: 'npm create svelte@latest',
-    buildCommand: 'npm run build',
-    defaultPort: 5173
-  },
-  'astro': {
-    name: 'Astro',
-    command: 'npm create astro@latest',
-    buildCommand: 'npm run build',
-    defaultPort: 3000
+  devDependencies: {
+    '@vitejs/plugin-react': '^4.2.0',
+    'autoprefixer': '^10.4.16',
+    'postcss': '^8.4.31',
+    'tailwindcss': '^3.3.5',
+    'vite': '^5.0.0',
+    'wrangler': '^3.22.1'
   }
 };
 
-async function promptFramework() {
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
-  });
+fs.writeFileSync('package.json', JSON.stringify(packageJson, null, 2));
 
-  console.log('\
-Available frameworks:');
-  Object.entries(FRAMEWORKS).forEach(([key, framework], index) => {
-    console.log(`${index + 1}. ${framework.name}`);
-  });
+// Create project structure
+const dirs = [
+  'src',
+  'src/components',
+  'src/pages',
+  'public',
+  'functions'
+];
 
-  return new Promise((resolve) => {
-    rl.question('\
-Select a framework (enter number): ', (answer) => {
-      rl.close();
-      const frameworks = Object.keys(FRAMEWORKS);
-      const selection = frameworks[parseInt(answer) - 1];
-      resolve(selection || 'vite-react'); // Default to Vite + React if invalid
-    });
-  });
-}
+dirs.forEach(dir => {
+  fs.mkdirSync(dir, { recursive: true });
+});
 
-async function setupProject(projectName) {
-  try {
-    // 1. Select Framework
-    const framework = await promptFramework();
-    const selectedFramework = FRAMEWORKS[framework];
-    console.log(`\
-Setting up ${selectedFramework.name} project...`);
+// Initialize npm and install dependencies
+console.log('Installing dependencies...');
+execSync('npm install');
 
-    // 2. Create Project
-    execSync(`${selectedFramework.command} ${projectName}`, { stdio: 'inherit' });
-    process.chdir(projectName);
+// Create configuration files
+const configFiles = {
+  'vite.config.js': `import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
 
-    // 3. Install Common Dependencies
-    console.log('\
-Installing common dependencies...');
-    execSync('npm install @cloudflare/workers-types wrangler lucide-react', { stdio: 'inherit' });
-
-    // 4. Create Worker Directories
-    fs.mkdirSync(path.join('src', 'worker', 'chat'), { recursive: true });
-    fs.mkdirSync(path.join('src', 'worker', 'contact'), { recursive: true });
-
-    // 5. Create Cloudflare Configuration
-    const wranglerConfig = `name = \"${projectName}-chat-worker\"
-main = \"index.js\"
-compatibility_date = \"2024-01-01\"
-
-[env.production]
-workers_dev = false
-
-[observability.logs]
-enabled = true
+export default defineConfig({
+  plugins: [react()],
+});`,
+  
+  'tailwind.config.js': `module.exports = {
+  content: ['./src/**/*.{js,jsx}'],
+  theme: {
+    extend: {},
+  },
+  plugins: [],
+};`,
+  
+  'postcss.config.js': `module.exports = {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
+};`,
+  
+  'wrangler.toml': `[env.production]
+name = "${projectName}"
 
 [[d1_databases]]
-binding = \"DB\"
-database_name = \"chat-history\"`;
+binding = "DB"
+database_name = "${projectName}_db"
+database_id = ""
 
-    fs.writeFileSync(
-      path.join('src', 'worker', 'chat', 'wrangler.toml'),
-      wranglerConfig
-    );
+[site]
+bucket = "./dist"`,
+  
+  '.env.example': `ANTHROPIC_API_KEY=your_api_key
+CLOUDFLARE_ACCOUNT_ID=your_account_id
+CLOUDFLARE_API_TOKEN=your_api_token`
+};
 
-    // 6. Create Pages Configuration
-    const pagesConfig = {
-      name: projectName,
-      framework: selectedFramework.name.toLowerCase(),
-      buildCommand: selectedFramework.buildCommand,
-      devCommand: 'npm run dev',
-      outputDirectory: framework === 'next' ? '.next' : 'dist'
-    };
+Object.entries(configFiles).forEach(([filename, content]) => {
+  fs.writeFileSync(filename, content);
+});
 
-    fs.writeFileSync('.cloudflare/pages.json', JSON.stringify(pagesConfig, null, 2));
-
-    console.log('\
-Project setup completed successfully!');
-    console.log(`\
-Next steps:
-1. cd ${projectName}
-2. npm install
-3. npm run dev (Development server will start on port ${selectedFramework.defaultPort})
-4. Deploy to Cloudflare Pages using 'npx wrangler pages deploy .'`);
-
-  } catch (error) {
-    console.error('Error setting up project:', error);
-    process.exit(1);
-  }
-}
-
-// Run the setup
-const projectName = process.argv[2];
-if (!projectName) {
-  console.error('Please provide a project name');
-  process.exit(1);
-}
+console.log('Project setup complete! Next steps:');
+console.log('1. cd', projectName);
+console.log('2. Copy .env.example to .env and add your API keys');
+console.log('3. npm run dev to start development server');
